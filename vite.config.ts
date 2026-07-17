@@ -34,11 +34,12 @@ const localBindingConfig = {
 };
 
 export default defineConfig(async () => {
-  // Keep Wrangler and Miniflare state project-local. These are non-secret tool
-  // settings; application environment belongs in ignored `.env*` files.
+  // Keep Wrangler and Miniflare state project-local. Give each Vite process its
+  // own registry because Miniflare's SQLite registry cannot be shared safely by
+  // concurrent dev servers or by a server restarting after an env-file change.
   process.env.WRANGLER_WRITE_LOGS ??= "false";
   process.env.WRANGLER_LOG_PATH ??= ".wrangler/logs";
-  process.env.MINIFLARE_REGISTRY_PATH ??= ".wrangler/registry";
+  process.env.MINIFLARE_REGISTRY_PATH ??= `.wrangler/registry-${process.pid}`;
 
   // Wrangler snapshots its log path while the Cloudflare plugin is imported.
   const { cloudflare } = await import("@cloudflare/vite-plugin");
