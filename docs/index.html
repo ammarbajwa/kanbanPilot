@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>kanbanPilot</title>
+    <link rel="stylesheet" href="./styles.css">
+  </head>
+  <body>
+    <main class="app-shell">
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">Pilot board</p>
+          <h1>kanbanPilot</h1>
+        </div>
+        <button id="addTask" type="button">Add task</button>
+      </header>
+
+      <section class="board" aria-label="Kanban board">
+        <div class="column" data-status="backlog">
+          <h2>Backlog</h2>
+          <div class="task-list" data-list="backlog"></div>
+        </div>
+        <div class="column" data-status="active">
+          <h2>Active</h2>
+          <div class="task-list" data-list="active"></div>
+        </div>
+        <div class="column" data-status="review">
+          <h2>Review</h2>
+          <div class="task-list" data-list="review"></div>
+        </div>
+        <div class="column" data-status="done">
+          <h2>Done</h2>
+          <div class="task-list" data-list="done"></div>
+        </div>
+      </section>
+    </main>
+    <script src="./app.js"></script>
+  </body>
+</html>
+
