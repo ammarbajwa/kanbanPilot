@@ -1,7 +1,7 @@
 // MS-2: Simple app that says hello to Ammar and Shahzaib.
-// The greeting text is styled pink per the acceptance criteria.
+// The greeting is rendered as a clear pink heading per the acceptance criteria.
 
-const PINK_COLOR = "#ff69b4";
+const PINK_COLOR = "#ff69b4"; // hot pink — the canonical CSS "pink" family color
 
 /**
  * Returns the greeting message.
@@ -12,11 +12,21 @@ export function getGreeting() {
 }
 
 /**
- * Returns an HTML string rendering the greeting in pink text.
+ * Returns the pink color used for the heading.
+ * @returns {string}
+ */
+export function getPinkColor() {
+  return PINK_COLOR;
+}
+
+/**
+ * Returns an HTML string rendering the greeting as a clear pink heading.
+ * The heading uses a descriptive class name and an inline style so the pink
+ * color is unambiguous and easy to assert on.
  * @returns {string}
  */
 export function renderGreeting() {
-  return `<p style="color: ${PINK_COLOR};">${getGreeting()}</p>`;
+  return `<h1 class="pink-greeting" style="color: ${PINK_COLOR};">${getGreeting()}</h1>`;
 }
 
 // When run directly, print the rendered greeting.
