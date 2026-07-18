@@ -1,6 +1,7 @@
 export type TicketStatus =
   | "TODO"
   | "READY_FOR_AGENT"
+  | "REVISION_QUEUED"
   | "IN_PROGRESS"
   | "READY_FOR_REVIEW"
   | "DONE";
@@ -17,6 +18,7 @@ export type TicketType =
 
 export type WorkflowState =
   | "QUEUED"
+  | "REVISION_QUEUED"
   | "VALIDATING_TICKET"
   | "LOADING_CONTEXT"
   | "PLANNING"
@@ -144,13 +146,18 @@ export const columns: { id: TicketStatus; title: string; owner: string }[] = [
 const allowedTransitions: Record<TicketStatus, TicketStatus[]> = {
   TODO: ["READY_FOR_AGENT"],
   READY_FOR_AGENT: ["IN_PROGRESS"],
+  REVISION_QUEUED: ["IN_PROGRESS"],
   IN_PROGRESS: ["READY_FOR_REVIEW", "READY_FOR_AGENT", "TODO"],
-  READY_FOR_REVIEW: ["READY_FOR_AGENT", "DONE"],
+  READY_FOR_REVIEW: ["REVISION_QUEUED", "DONE"],
   DONE: [],
 };
 
 export function canTransition(from: TicketStatus, to: TicketStatus) {
   return allowedTransitions[from].includes(to);
+}
+
+export function boardColumnForStatus(status: TicketStatus): TicketStatus {
+  return status === "REVISION_QUEUED" ? "READY_FOR_AGENT" : status;
 }
 
 export function validateReadyForAgent(

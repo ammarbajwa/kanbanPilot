@@ -5,7 +5,13 @@ import {
   extractOutputText,
   validateRelativePath,
 } from "../scripts/demo/akash-agent.mjs";
-import { createRun, normalizeTicket } from "../scripts/demo/workflow.mjs";
+import {
+  changedFilePaths,
+  createRun,
+  normalizeRevisionFeedback,
+  normalizeTicket,
+  queueRevision,
+} from "../scripts/demo/workflow.mjs";
 
 const customTicket = {
   id: "ticket-2",
@@ -49,6 +55,13 @@ test("allows demo writes and blocks paths outside the fixed scope", () => {
   );
 });
 
+test("parses porcelain paths even when command output trims the first status space", () => {
+  assert.deepEqual(
+    changedFilePaths("M demo/runs/ms-2/app.mjs\n M demo/runs/ms-2/app.test.mjs"),
+    ["demo/runs/ms-2/app.mjs", "demo/runs/ms-2/app.test.mjs"],
+  );
+});
+
 test("builds a scoped ticket prompt and extracts Akash message text", () => {
   const prompt = createTicketPrompt(
     customTicket,
@@ -58,13 +71,30 @@ test("builds a scoped ticket prompt and extracts Akash message text", () => {
   assert.match(prompt, /Say hello to the team/);
   assert.match(prompt, /demo\/runs\/ms-2-example/);
   assert.match(prompt, /\.test\.mjs/);
-  assert.match(prompt, /Previous validation feedback/);
+  assert.match(prompt, /read_file/);
+  assert.match(prompt, /A validation check failed/);
   assert.equal(
     extractOutputText({
       content: [{ type: "text", text: "Implemented and tested." }],
     }),
     "Implemented and tested.",
   );
+});
+
+test("queues bounded feedback for the existing pull request", () => {
+  const run = createRun(customTicket);
+  run.status = "succeeded";
+  run.state = "READY_FOR_HUMAN";
+  run.pullRequestUrl = "https://github.com/ammarbajwa/kanbanPilot/pull/99";
+  run.pullRequestState = "DRAFT";
+
+  assert.equal(normalizeRevisionFeedback("  Make the heading clearer.  "), "Make the heading clearer.");
+  queueRevision(run, "Make the heading clearer.");
+  assert.equal(run.status, "queued");
+  assert.equal(run.state, "REVISION_QUEUED");
+  assert.equal(run.revisionCount, 1);
+  assert.equal(run.events.at(-1).step, "Revision requested");
+  assert.throws(() => normalizeRevisionFeedback(""), /1-2,000 characters/);
 });
 
 test("creates unique draft-PR workflow runs on codex branches", () => {

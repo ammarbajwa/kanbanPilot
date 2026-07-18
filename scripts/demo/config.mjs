@@ -22,6 +22,7 @@ export const DEMO_CONFIG = {
   port: Number(process.env.MERGESTAMP_DEMO_PORT || 4317),
   maxToolRounds: 12,
   maxChangedFiles: 3,
+  maxRevisionCycles: 3,
   writableRoots: ["demo"],
   forbiddenSegments: [
     ".env",

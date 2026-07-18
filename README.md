@@ -37,7 +37,11 @@ persistence is not required.
 
 ## Project shape
 
-- `app/page.tsx` - MergeStamp workspace UI
+- `app/page.tsx` - focused daily Board at `/`
+- `app/activity/page.tsx` - project-wide execution timeline at `/activity`
+- `app/settings/page.tsx` - repository, runtime, and policy settings at `/settings`
+- `app/mergestamp-provider.tsx` - shared ticket, workflow, and project state
+- `app/mergestamp-shell.tsx` - persistent route navigation and worker status
 - `app/mergestamp-domain.ts` - ticket, workflow, validation, and seed state
 - `app/globals.css` - dark-mode operational interface styling
 - `scripts/demo/server.mjs` - loopback HTTP boundary used by the product
@@ -60,6 +64,9 @@ persistence is not required.
   then checks the diff before commit and push.
 - The worker opens a draft PR. MergeStamp can mark it ready and sync its live
   GitHub state; only a GitHub-confirmed merge moves the ticket to Done.
+- Review feedback moves a ticket through `REVISION_QUEUED` and back to active
+  work. The worker reads only the ticket's generated directory, applies the
+  feedback, reruns validation, and pushes another commit to the same PR.
 
 The demo worker binds only to `127.0.0.1:4317` and accepts product requests from
 local development ports. This execution path is local-only: a hosted frontend cannot

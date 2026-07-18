@@ -2,9 +2,12 @@ import { createServer } from "node:http";
 import { DEMO_CONFIG } from "./config.mjs";
 import {
   createRun,
+  executeRevision,
   executeWorkflow,
   getPreflight,
   markPullRequestReady,
+  queueRevision,
+  recoverRun,
   syncPullRequest,
 } from "./workflow.mjs";
 
@@ -80,6 +83,28 @@ const server = createServer(async (request, response) => {
       runs.set(run.id, run);
       currentRunId = run.id;
       void executeWorkflow(run);
+      return send(response, 202, run, origin);
+    }
+
+    const revisionMatch = url.pathname.match(/^\/runs\/([^/]+)\/revisions$/);
+    if (request.method === "POST" && revisionMatch) {
+      const body = await readJson(request);
+      let run = runs.get(revisionMatch[1]);
+      if (!run && body.run) {
+        run = await recoverRun(body.run, revisionMatch[1]);
+        runs.set(run.id, run);
+      }
+      if (!run) return send(response, 404, { error: "Run not found." }, origin);
+      const active = currentRunId ? runs.get(currentRunId) : null;
+      if (active && active.id !== run.id && ["queued", "running"].includes(active.status)) {
+        return send(response, 409, { error: "Another demo workflow is active.", run: active }, origin);
+      }
+      const feedback = queueRevision(run, body.feedback, {
+        alreadyQueued: body.alreadyQueued === true,
+        revisionCount: body.revisionCount,
+      });
+      currentRunId = run.id;
+      setImmediate(() => void executeRevision(run, feedback));
       return send(response, 202, run, origin);
     }
 

@@ -1,4 +1,4 @@
-import { mkdir, realpath, writeFile } from "node:fs/promises";
+import { mkdir, readdir, realpath, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
@@ -86,6 +86,150 @@ export function createRun(ticketInput = DEMO_TICKET) {
   };
 }
 
+export function normalizeRevisionFeedback(input) {
+  const feedback = typeof input === "string" ? input.trim() : "";
+  if (!feedback || feedback.length > 2_000) {
+    throw new Error("Revision feedback must be 1-2,000 characters.");
+  }
+  return feedback;
+}
+
+export function queueRevision(run, feedbackInput, options = {}) {
+  const feedback = normalizeRevisionFeedback(feedbackInput);
+  if (!run.pullRequestUrl || !["DRAFT", "OPEN"].includes(run.pullRequestState)) {
+    throw new Error("An open pull request is required for a revision.");
+  }
+  if (run.status === "queued" || run.status === "running") {
+    throw new Error("This workflow is already active.");
+  }
+
+  const requestedCount = Number(options.revisionCount);
+  const revisionCount = options.alreadyQueued
+    ? Math.max(run.revisionCount, Number.isInteger(requestedCount) ? requestedCount : 0)
+    : run.revisionCount + 1;
+  if (revisionCount < 1 || revisionCount > DEMO_CONFIG.maxRevisionCycles) {
+    throw new Error(`The ${DEMO_CONFIG.maxRevisionCycles}-revision limit has been reached.`);
+  }
+
+  run.revisionCount = revisionCount;
+  run.pendingFeedback = feedback;
+  run.status = "queued";
+  run.state = "REVISION_QUEUED";
+  run.error = undefined;
+  run.evidence.review = "Revision queued";
+  const duplicate = run.events.some(
+    (event) => event.step === "Revision requested" && event.message === feedback,
+  );
+  if (!duplicate) addEvent(run, "Revision requested", "SUCCEEDED", feedback);
+  return feedback;
+}
+
+function limitedText(value, fallback, limit = 4_000) {
+  return typeof value === "string" && value.trim()
+    ? value.trim().slice(0, limit)
+    : fallback;
+}
+
+function recoveredEvents(input, runId) {
+  if (!Array.isArray(input)) return [];
+  const statuses = new Set(["STARTED", "SUCCEEDED", "FAILED", "SKIPPED"]);
+  return input.slice(-100).map((event, index) => ({
+    id: `${runId}-recovered-${index + 1}`,
+    step: limitedText(event?.step, "Recovered activity", 120),
+    status: statuses.has(event?.status) ? event.status : "SUCCEEDED",
+    message: limitedText(event?.message, "Recovered from browser memory."),
+    createdAt: Number.isNaN(Date.parse(event?.createdAt))
+      ? timestamp()
+      : new Date(event.createdAt).toISOString(),
+  }));
+}
+
+export async function recoverRun(input, expectedId) {
+  if (!input || typeof input !== "object" || input.id !== expectedId) {
+    throw new Error("The run recovery payload is invalid.");
+  }
+  if (!/^demo-\d{10,16}-[a-f0-9]{8}$/.test(expectedId)) {
+    throw new Error("The run id cannot be recovered.");
+  }
+
+  const ticket = normalizeTicket(input.ticket);
+  const suffix = expectedId.slice("demo-".length);
+  const scope = `demo/runs/ms-${ticket.sequenceNumber}-${suffix}`;
+  if (input.scope !== scope) throw new Error("The run scope does not match the ticket.");
+
+  const branchName = limitedText(input.branchName, "", 240);
+  if (
+    !branchName.startsWith(`codex/mergestamp-ms-${ticket.sequenceNumber}-`) ||
+    !branchName.endsWith(`-${suffix}`)
+  ) {
+    throw new Error("The recovery branch is invalid.");
+  }
+
+  const worktreePath = path.join(tmpdir(), "mergestamp-demo", expectedId);
+  if (input.worktreePath !== worktreePath) throw new Error("The recovery worktree is invalid.");
+  await realpath(worktreePath);
+  const branch = await runCommand("git", ["branch", "--show-current"], { cwd: worktreePath });
+  if (branch.stdout !== branchName) throw new Error("The worktree branch does not match the run.");
+
+  const pullRequestUrl = limitedText(input.pullRequestUrl, "", 500);
+  const prUrl = new URL(pullRequestUrl);
+  if (
+    prUrl.origin !== "https://github.com" ||
+    !new RegExp(`^/${DEMO_CONFIG.repository.replace("/", "\\/")}/pull/\\d+$`).test(prUrl.pathname)
+  ) {
+    throw new Error("The recovery pull request is invalid.");
+  }
+  const prResult = await runCommand(
+    "gh",
+    ["pr", "view", pullRequestUrl, "--json", "headRefName,baseRefName,state,isDraft,mergedAt,url"],
+    { cwd: worktreePath },
+  );
+  const pr = JSON.parse(prResult.stdout);
+  if (
+    pr.headRefName !== branchName ||
+    pr.baseRefName !== DEMO_CONFIG.baseBranch ||
+    pr.mergedAt ||
+    pr.state === "CLOSED"
+  ) {
+    throw new Error("GitHub no longer reports an editable pull request for this run.");
+  }
+
+  const tracked = await runCommand("git", ["ls-files", "--", scope], { cwd: worktreePath });
+  const commit = await runCommand("git", ["rev-parse", "HEAD"], { cwd: worktreePath });
+  const evidence = input.evidence || {};
+  return {
+    id: expectedId,
+    ticket,
+    ticketId: ticket.id,
+    status: "succeeded",
+    state: "READY_FOR_HUMAN",
+    attempt: Number.isInteger(input.attempt) ? input.attempt : 1,
+    revisionCount: Number.isInteger(input.revisionCount)
+      ? Math.max(0, Math.min(input.revisionCount, DEMO_CONFIG.maxRevisionCycles))
+      : 0,
+    branchName,
+    scope,
+    model: DEMO_CONFIG.model,
+    pullRequestUrl,
+    pullRequestState: pr.isDraft ? "DRAFT" : "OPEN",
+    worktreePath,
+    latestCommitSha: commit.stdout,
+    modelSummary: limitedText(input.modelSummary, "Recovered from browser memory."),
+    events: recoveredEvents(input.events, expectedId),
+    evidence: {
+      tests: limitedText(evidence.tests, "Pending"),
+      lint: limitedText(evidence.lint, "Pending"),
+      build: limitedText(evidence.build, "Pending"),
+      review: "Recovered for revision",
+      changedFiles: tracked.stdout.split("\n").filter(Boolean),
+      assumptions: Array.isArray(evidence.assumptions)
+        ? evidence.assumptions.map((item) => limitedText(item, "", 500)).filter(Boolean).slice(0, 12)
+        : [],
+      risk: ["LOW", "MEDIUM", "HIGH"].includes(evidence.risk) ? evidence.risk : "LOW",
+    },
+  };
+}
+
 export async function getPreflight() {
   const cwd = DEMO_CONFIG.repositoryRoot;
   const checks = [];
@@ -156,11 +300,11 @@ export async function getPreflight() {
   };
 }
 
-function changedFilePaths(porcelain) {
+export function changedFilePaths(porcelain) {
   return porcelain
     .split("\n")
     .filter(Boolean)
-    .map((line) => line.slice(3).split(" -> ").at(-1));
+    .map((line) => line.slice(line[2] === " " ? 3 : 2).split(" -> ").at(-1));
 }
 
 async function validateChanges(run) {
@@ -179,12 +323,12 @@ async function validateChanges(run) {
   }
   run.evidence.changedFiles = changedFiles;
 
-  const testFiles = changedFiles.filter((file) => file.endsWith(".test.mjs"));
+  const scopePath = await realpath(path.join(run.worktreePath, run.scope));
+  const testFiles = (await readdir(scopePath, { recursive: true }))
+    .filter((file) => file.endsWith(".test.mjs"));
   if (testFiles.length === 0) {
     throw new Error("The agent must add at least one .test.mjs file.");
   }
-  const scopePath = await realpath(path.join(run.worktreePath, run.scope));
-  const scopedTestFiles = testFiles.map((file) => path.posix.relative(run.scope, file));
   const tests = await runCommand(
     "node",
     [
@@ -192,7 +336,7 @@ async function validateChanges(run) {
       `--allow-fs-read=${scopePath}`,
       "--test-isolation=none",
       "--test",
-      ...scopedTestFiles,
+      ...testFiles,
     ],
     {
       cwd: scopePath,
@@ -208,6 +352,14 @@ async function validateChanges(run) {
 
   await runCommand("git", ["diff", "--check"], { cwd: run.worktreePath });
   run.evidence.lint = "git diff --check passed";
+}
+
+function workflowError(error) {
+  return error instanceof CommandError
+    ? error.result.stderr || error.result.stdout || error.message
+    : error instanceof Error
+      ? error.message
+      : String(error);
 }
 
 function toolMessage(call) {
@@ -335,12 +487,65 @@ export async function executeWorkflow(run) {
   } catch (error) {
     run.status = "failed";
     run.state = "FAILED";
-    run.error = error instanceof CommandError
-      ? error.result.stderr || error.result.stdout || error.message
-      : error instanceof Error
-        ? error.message
-        : String(error);
+    run.error = workflowError(error);
     addEvent(run, "Workflow failed", "FAILED", run.error);
+  }
+}
+
+export async function executeRevision(run, feedbackInput = run.pendingFeedback) {
+  const feedback = normalizeRevisionFeedback(feedbackInput);
+  run.status = "running";
+  run.state = "BUILDING";
+  run.error = undefined;
+  addEvent(
+    run,
+    "Revision claimed",
+    "SUCCEEDED",
+    `The local worker claimed revision ${run.revisionCount} for MS-${run.ticket.sequenceNumber}.`,
+  );
+
+  try {
+    if (!run.worktreePath) throw new Error("The run worktree is unavailable.");
+    await realpath(run.worktreePath);
+    addEvent(run, "LLM revision", "STARTED", `Calling ${run.model} with review feedback.`);
+    const summary = await runCodingAgent({
+      root: run.worktreePath,
+      ticket: run.ticket,
+      writableRoot: run.scope,
+      feedback,
+      onToolCall(call) {
+        addEvent(run, `Revision tool: ${call.name}`, call.ok ? "SUCCEEDED" : "FAILED", toolMessage(call));
+      },
+    });
+    run.modelSummary = summary;
+    addEvent(run, "LLM revision", "SUCCEEDED", summary);
+
+    run.state = "LOCAL_VALIDATION";
+    addEvent(run, "Revision validation", "STARTED", "Running the ticket test suite and diff checks.");
+    await validateChanges(run);
+    addEvent(run, "Revision validation", "SUCCEEDED", "All deterministic checks passed.");
+
+    await runCommand("git", ["add", "--", run.scope], { cwd: run.worktreePath });
+    await runCommand(
+      "git",
+      ["commit", "-m", `fix: revise MS-${run.ticket.sequenceNumber} iteration ${run.revisionCount}`],
+      { cwd: run.worktreePath },
+    );
+    const commit = await runCommand("git", ["rev-parse", "HEAD"], { cwd: run.worktreePath });
+    run.latestCommitSha = commit.stdout;
+    addEvent(run, "Revision commit", "SUCCEEDED", commit.stdout.slice(0, 12));
+
+    await runCommand("git", ["push", "origin", run.branchName], { cwd: run.worktreePath });
+    addEvent(run, "Revision push", "SUCCEEDED", `Updated ${run.pullRequestUrl}.`);
+    run.evidence.review = "Revision pushed for human review";
+    run.state = "READY_FOR_HUMAN";
+    run.status = "succeeded";
+    run.pendingFeedback = undefined;
+  } catch (error) {
+    run.status = "failed";
+    run.state = "FAILED";
+    run.error = workflowError(error);
+    addEvent(run, "Revision failed", "FAILED", run.error);
   }
 }
 
