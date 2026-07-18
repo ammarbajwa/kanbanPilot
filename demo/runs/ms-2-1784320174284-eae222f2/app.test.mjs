@@ -1,6 +1,11 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { getGreeting, renderGreeting, getPinkColor } from "./app.mjs";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { dirname, join } from "node:path";
+import { getGreeting, renderGreeting, getPinkColor, isNode } from "./app.mjs";
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
 
 test("getGreeting says hello to Ammar and Shahzaib", () => {
   const greeting = getGreeting();
@@ -51,4 +56,38 @@ test("rendered text is non-empty and human-readable", () => {
 test("pink color is a clearly pink shade", () => {
   const color = getPinkColor();
   assert.equal(color, "#ff69b4", "expected hot pink (#ff69b4) for a clear pink heading");
+});
+
+test("app.mjs guards process usage so it is browser-safe", () => {
+  // isNode() must be a guarded, side-effect-free check that does not throw.
+  assert.equal(typeof isNode(), "boolean", "isNode() should return a boolean");
+  // Under node:test we are running in Node, so the guard should detect it.
+  assert.equal(isNode(), true, "isNode() should be true when running under Node.js");
+});
+
+test("index.html exists and imports app.mjs to render the greeting", () => {
+  const html = readFileSync(join(__dirname, "index.html"), "utf8");
+
+  // Must be a valid HTML document.
+  assert.match(html, /<!DOCTYPE html>/i, "expected a DOCTYPE declaration");
+  assert.match(html, /<html/i, "expected an <html> element");
+
+  // Must import app.mjs as an ES module.
+  assert.match(
+    html,
+    /import\s+\{[^}]*renderGreeting[^}]*\}\s+from\s+["']\.\/app\.mjs["']/,
+    "expected an ES module import of renderGreeting from ./app.mjs"
+  );
+
+  // Must render the greeting into the DOM.
+  assert.match(html, /innerHTML\s*=\s*renderGreeting\(\)/, "expected renderGreeting() to be injected into the DOM");
+});
+
+test("index.html does not reference process directly (browser-safe)", () => {
+  const html = readFileSync(join(__dirname, "index.html"), "utf8");
+  assert.doesNotMatch(
+    html,
+    /\bprocess\b/,
+    "index.html must not reference process so it stays browser-safe"
+  );
 });
